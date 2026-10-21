@@ -12,14 +12,21 @@ with (ROOT / 'songs.csv').open(encoding='utf-8-sig', newline='') as f:
     SONGS = list(csv.DictReader(f))
 SONG_BY_ID = {s['id']: s for s in SONGS}
 
-st.set_page_config(page_title='melo | Find your music people', page_icon='🎧', layout='centered')
-st.markdown('''<style>
-.stApp {background:#101522;color:#f5f7fb} .block-container{max-width:830px;padding-top:1.7rem}
-h1,h2,h3{letter-spacing:-.04em} .hero{padding:24px 25px;border-radius:24px;background:linear-gradient(125deg,#1b2a35,#172033);border:1px solid #354451;margin-bottom:22px}
-.brand{font-size:35px;font-weight:900;color:#a9f1ce}.sub{color:#b7c4d2;font-size:13px;letter-spacing:2px}
-[data-testid="stMetric"]{border:1px solid #354451;border-radius:15px;padding:12px;background:#1c2532}
-div.stButton>button[kind="primary"]{background:#a9f1ce;color:#10201b;border:0;border-radius:12px;font-weight:800}
-</style>''',unsafe_allow_html=True)
+st.set_page_config(page_title='MELODY | Music Match', page_icon='🎧', layout='centered')
+st.markdown("""<style>
+.stApp {background:#f6f0ff;color:#44336d}
+.block-container {max-width:790px;padding-top:1.4rem;padding-bottom:4rem}
+h1,h2,h3,p,label,[data-testid="stMarkdownContainer"] {color:#44336d}
+.hero {background:#dcd1ff;border:3px solid #7460a2;border-radius:18px;box-shadow:5px 5px 0 #b5a3da;padding:30px 22px;text-align:center;margin-bottom:20px}
+.brand {font-size:clamp(36px,8vw,65px);font-weight:1000;color:#5d459b;text-shadow:3px 3px #fff;letter-spacing:2px}
+.sub {font-size:12px;letter-spacing:3px;color:#65558b}
+.stButton>button {border:2px solid #7763a2;border-radius:8px;background:#fff8d3;color:#4e3b7d;box-shadow:3px 3px 0 #b5a3da;font-weight:800;min-height:43px}
+.stButton>button[kind="primary"] {background:#bcebdc;color:#3c3260;border:2px solid #7763a2}
+[data-testid="stVerticalBlockBorderWrapper"] {border-color:#c5b3e8}
+[data-testid="stMetric"] {background:#fff;border:2px solid #bca8e3;border-radius:12px;padding:14px}
+[data-testid="stTabs"] button {color:#5c4a83}
+[data-testid="stAlert"] {border-radius:12px}
+</style>""",unsafe_allow_html=True)
 
 # Streamlit Community Cloud persistent storage should use Supabase.
 # SQLite is for a single-computer demonstration only.
@@ -56,27 +63,62 @@ def save(nickname,ids):
         db().execute('INSERT INTO submissions(nickname,song_ids) VALUES (?,?)',(nickname,'|'.join(ids)))
         db().commit()
 
-st.markdown('<div class="hero"><div class="brand">melo ♫</div><div class="sub">FIND YOUR MUSIC PEOPLE</div><h2>너의 취향을 들려줘.</h2><p>좋아하는 노래로 연결되는 우리 학교 음악 친구들</p></div>',unsafe_allow_html=True)
-if client is None:
-    st.info('🧪 현재 로컬 체험 모드입니다. 같은 컴퓨터에서는 데이터가 저장됩니다. 여러 휴대폰에서 함께 사용하려면 Supabase 연결 후 온라인 배포가 필요합니다.')
+if 'stage' not in st.session_state: st.session_state.stage='start'
+if 'picked' not in st.session_state: st.session_state.picked=[]
+if 'identity' not in st.session_state: st.session_state.identity=''
 
-survey,match,math_tab=st.tabs(['🎵 취향 등록','💚 친구 찾기','📐 수학 원리'])
+if st.session_state.stage == 'start':
+    st.markdown('<div class="hero"><div class="sub">♪ MUSIC MATCH GAME ♪</div><div class="brand">♫ MELODY ♫</div><h2>우리의 취향이 만나는 곳</h2><p>좋아하는 노래로 음악 친구를 찾아봐!</p><p>♥ ♥ ♥</p></div>',unsafe_allow_html=True)
+    if st.button('▶ START GAME',type='primary',use_container_width=True):
+        st.session_state.stage='profile';st.rerun()
+    st.stop()
+
+if st.session_state.stage == 'profile':
+    st.markdown('<div class="hero"><div class="sub">LEVEL 01 · PLAYER PROFILE</div><div class="brand">MELODY ♫</div><h2>너를 뭐라고 부를까?</h2></div>',unsafe_allow_html=True)
+    identity=st.text_input('인스타 아이디 또는 닉네임',value=st.session_state.identity,max_chars=30,placeholder='예: music_lover 또는 @music_lover')
+    st.caption('인스타 아이디 대신 닉네임을 입력해도 돼요. 다만 닉네임만 입력하면 매칭된 친구가 인스타그램으로 연락하기 어려울 수 있어요. 입력한 이름은 다른 참여자에게 표시돼요.')
+    if st.button('NEXT LEVEL →',type='primary',use_container_width=True):
+        if len(identity.strip())<2:st.error('2글자 이상 입력해 주세요.')
+        else:st.session_state.identity=identity.strip();st.session_state.stage='app';st.rerun()
+    st.stop()
+
+st.markdown('<div class="hero"><div class="sub">♪ FIND YOUR MUSIC PEOPLE ♪</div><div class="brand">MELODY ♫</div><h2>너의 취향을 들려줘!</h2></div>',unsafe_allow_html=True)
+if client is None:
+    st.info('🧪 현재 로컬 체험 모드예요. 다른 기기와 데이터를 공유하려면 Supabase 연결이 필요해요.')
+survey,match,math_tab=st.tabs(['🎵 노래 선택','💗 친구 매칭','🎮 HOW IT WORKS'])
 with survey:
-    st.subheader('01 · 나의 취향 등록')
-    nickname=st.text_input('익명 닉네임 (실명 사용하지 않기)',max_chars=20,placeholder='예: mintwave')
+    st.subheader('LEVEL 02 · 나의 플레이리스트')
+    nickname=st.session_state.identity
+    st.caption(f'PLAYER: {nickname}')
     genres=['전체']+sorted({s['category'] for s in SONGS})
     category=st.selectbox('장르',genres)
-    query=st.text_input('노래 검색',placeholder='제목 또는 가수 이름')
-    if 'picked' not in st.session_state: st.session_state.picked=[]
-    shown=[s for s in SONGS if (category=='전체' or s['category']==category) and (not query or query.casefold() in (s['title']+' '+s['artist']).casefold())]
-    st.caption(f'전체 {len(SONGS)}곡 · 검색 결과 {len(shown)}곡 · 5~15곡 선택')
-    page_count=max(1,(len(shown)+24)//25)
-    page=st.number_input('페이지',min_value=1,max_value=page_count,value=1,step=1)
-    for s in shown[(page-1)*25:page*25]:
+    shown=[s for s in SONGS if category=='전체' or s['category']==category]
+    st.caption(f'♪ {category} · {len(shown)}곡 · 5~15곡 선택')
+    page_count=max(1,(len(shown)+9)//10)
+    page_key='page_'+category
+    if page_key not in st.session_state:st.session_state[page_key]=1
+    current_page=min(st.session_state[page_key],page_count)
+    for s in shown[(current_page-1)*10:current_page*10]:
         sid=s['id']
-        checked=st.checkbox(f"{s['title']} — {s['artist']}",value=sid in st.session_state.picked,key='song_'+sid)
-        if checked and sid not in st.session_state.picked: st.session_state.picked.append(sid)
-        if not checked and sid in st.session_state.picked: st.session_state.picked.remove(sid)
+        checked=st.checkbox(f"♫ {s['title']} — {s['artist']}",value=sid in st.session_state.picked,key='song_'+sid)
+        if checked and sid not in st.session_state.picked:
+            if len(st.session_state.picked)<15:st.session_state.picked.append(sid)
+            else:
+                st.session_state['song_'+sid]=False
+                st.warning('최대 15곡까지 선택할 수 있어요.')
+        if not checked and sid in st.session_state.picked:st.session_state.picked.remove(sid)
+    st.caption(f'PAGE {current_page} / {page_count}')
+    # 페이지 번호 버튼: 현재 페이지 주변 최대 5개 표시
+    start=max(1,min(current_page-2,page_count-4))
+    numbers=list(range(start,min(page_count,start+4)+1))
+    cols=st.columns(len(numbers)+2)
+    if cols[0].button('◀',disabled=current_page==1,key='prev_'+category):
+        st.session_state[page_key]=current_page-1;st.rerun()
+    for idx,n in enumerate(numbers,1):
+        if cols[idx].button(str(n),key=f'page_{category}_{n}',type='primary' if n==current_page else 'secondary'):
+            st.session_state[page_key]=n;st.rerun()
+    if cols[-1].button('▶',disabled=current_page==page_count,key='next_'+category):
+        st.session_state[page_key]=current_page+1;st.rerun()
     st.markdown(f'**선택한 곡: {len(st.session_state.picked)} / 15**')
     if st.session_state.picked:
         for sid in st.session_state.picked:
@@ -92,12 +134,12 @@ with survey:
         else:
             try:
                 save(nickname.strip(),st.session_state.picked)
-                st.success('등록 완료! 💚 친구 찾기 탭에서 확인해 보세요.')
+                st.success('등록 완료! 💚 위의 친구 매칭 탭으로 이동해 봐!')
             except Exception:
                 st.error('등록 실패: 이미 존재하는 닉네임이거나 데이터베이스 연결에 문제가 있습니다.')
 
 with match:
-    st.subheader('02 · 음악 취향이 닮은 친구')
+    st.subheader('LEVEL 03 · 음악 취향이 닮은 친구')
     try: people=rows()
     except Exception: people=[];st.error('저장된 참여자 정보를 읽지 못했습니다.')
     if len(people)<2:
@@ -148,7 +190,7 @@ with match:
             st.caption('온라인 모드의 연결 요청 기능은 인증·권한 정책 구현 후 활성화됩니다.')
 
 with math_tab:
-    st.subheader('집합과 명제로 만든 매칭 알고리즘')
+    st.subheader('HOW IT WORKS · 집합과 명제')
     st.latex(r'J(A,B)=\frac{|A\cap B|}{|A\cup B|')
     st.write('선택한 노래들의 장르·분위기·템포를 각각 집합으로 바꾼 뒤 자카드 유사도를 계산합니다.')
     st.latex(r'S=0.35J_{song}+0.25J_{genre}+0.25J_{mood}+0.15J_{tempo}')
