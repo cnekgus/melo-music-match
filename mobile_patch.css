@@ -1,0 +1,19 @@
+/* Mobile layout patch */
+html,body,.stApp{max-width:100%;overflow-x:hidden}
+[data-testid="stAppViewContainer"],.main,.block-container{min-width:0}
+[data-testid="stHorizontalBlock"]{flex-wrap:nowrap!important;gap:.35rem!important}
+[data-testid="column"]{min-width:0!important;flex:1 1 0!important;width:0!important}
+[data-testid="stCheckbox"]{width:100%;box-sizing:border-box;min-width:0}
+[data-testid="stCheckbox"] label{width:100%;min-width:0}
+[data-testid="stCheckbox"] label p{overflow-wrap:anywhere;word-break:break-word;line-height:1.5}
+[data-testid="stButton"]{min-width:0}
+[data-testid="stButton"] button{width:100%;max-width:100%;overflow-wrap:anywhere}
+@media(max-width:600px){
+  .block-container{padding:1rem .7rem 5rem!important}
+  [data-testid="stHorizontalBlock"]{gap:.4rem!important}
+  .game-shell:before{font-size:12px;letter-spacing:2px}
+  .stButton>button{min-height:44px;font-size:13px;padding:.4rem .35rem}
+  [data-testid="stCheckbox"]{padding:10px 8px;margin:3px 0}
+  [data-testid="stCheckbox"] label p{font-size:13px!important}
+  .panel-title{font-size:17px}
+}
