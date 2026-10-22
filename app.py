@@ -247,13 +247,15 @@ if st.session_state.stage == "songs":
                 else:
                     st.session_state.delete_code=save_profile(st.session_state.identity,st.session_state.picked)
                     go("saved")
-            except Exception:
-                # Existing nickname: allow revisiting the results without writing over another user.
-                try:
-                    existing=next((p for p in load_people() if p["nickname"]==st.session_state.identity),None)
-                    if existing and set(existing["song_ids"])==set(st.session_state.picked):go("results")
-                    else:st.error("이 이름은 이미 사용 중이거나 저장에 실패했어. 다른 이름으로 다시 시도해 줘!")
-                except Exception:st.error("저장 중 오류가 발생했어. 데이터베이스 연결을 확인해 줘!")
+            except Exception as err:
+                # Show only non-sensitive diagnostics. Never render the raw exception,
+                # because it can contain account data or API URLs.
+                error_type = type(err).__name__
+                status = getattr(err, "code", None)
+                st.error(f"저장 실패 · 오류 종류: {error_type}" + (f" · 코드: {status}" if status is not None and str(status).isalnum() else ""))
+                st.caption("이 문구만 캡처해서 보내줘. API 키와 개인정보는 보내지 마!")
+                if error_type in ("APIError", "PostgrestException"):
+                    st.info("DB 요청이 거절됐어. 연결 키의 종류, 테이블 권한 또는 중복 닉네임을 확인해야 해.")
     if st.button("← 프로필로",use_container_width=True):go("profile")
     st.stop()
 
