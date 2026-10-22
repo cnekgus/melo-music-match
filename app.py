@@ -3,6 +3,10 @@ import csv
 import html
 import os
 import sqlite3
+import hashlib
+import secrets
+import time
+import threading
 from pathlib import Path
 
 import streamlit as st
@@ -63,34 +67,86 @@ h1,h2,h3,p,span,label,[data-testid="stMarkdownContainer"]{color:var(--ink)}
 @st.cache_resource
 def local_db():
     con = sqlite3.connect(os.environ.get("MELO_DB", str(ROOT / "melody_demo.sqlite3")), check_same_thread=False)
-    con.execute('CREATE TABLE IF NOT EXISTS submissions (nickname TEXT PRIMARY KEY, song_ids TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP)')
+    con.execute('CREATE TABLE IF NOT EXISTS submissions (nickname TEXT PRIMARY KEY, song_ids TEXT NOT NULL, delete_hash TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)')
+    cols = {row[1] for row in con.execute("PRAGMA table_info(submissions)").fetchall()}
+    if "delete_hash" not in cols:
+        con.execute('ALTER TABLE submissions ADD COLUMN delete_hash TEXT')
     con.commit()
     return con
 
 @st.cache_resource
 def online_client():
-    try:
-        from supabase import create_client
-        conf = st.secrets["supabase"]
-        return create_client(conf["url"], conf["key"])
-    except (KeyError, FileNotFoundError, AttributeError):
-        return None
+    from supabase import create_client
+    conf = st.secrets["supabase"]
+    # Only use the *server-side* secret key from Streamlit Secrets.
+    # The publishable key can no longer read/write submissions after hardening.
+    return create_client(conf["url"], conf["service_key"])
 
-CLIENT = online_client()
+try:
+    conf = st.secrets.get("supabase")
+except (FileNotFoundError, KeyError):
+    conf = None
+
+if conf and not conf.get("service_key"):
+    st.error("🔐 보안 업그레이드 설정 중이야. Streamlit Secrets에 [supabase] service_key를 추가해 줘! 기존 key 값은 유지해도 돼.")
+    st.stop()
+try:
+    CLIENT = online_client() if conf else None
+except Exception:
+    st.error("🔐 Supabase 서버 연결 설정을 확인해 줘. service_key는 이 채팅이나 GitHub에 공유하지 마!")
+    st.stop()
+
+@st.cache_resource
+def activity_log():
+    return {"lock":threading.Lock(), "events":{}}
+
+def allowed_submission():
+    # Basic server-side friction; not bot-proof, especially across restarts/replicas.
+    state=activity_log()
+    with state["lock"]:
+        now=time.time()
+        session=st.session_state.session_nonce
+        times=[v for v in state["events"].get(session,[]) if now-v<3600]
+        if times and now-times[-1]<30:
+            return False, "연속 등록은 30초 뒤에 다시 시도해 줘!"
+        if len(times)>=3:
+            return False, "한 시간에 최대 3번만 등록할 수 있어. 잠시 뒤 다시 시도해 줘!"
+        state["events"][session]=times+[now]
+    return True, ""
+
+def hash_code(code):
+    return hashlib.sha256(code.strip().encode("utf-8")).hexdigest()
 
 def load_people():
     if CLIENT:
-        return CLIENT.table("submissions").select("nickname,song_ids").execute().data or []
+        # Results are computed server-side; anonymous Supabase API roles cannot read this table.
+        return CLIENT.table("submissions").select("nickname,song_ids").order("created_at",desc=True).limit(1000).execute().data or []
     records = local_db().execute("SELECT nickname,song_ids FROM submissions").fetchall()
     return [{"nickname": name, "song_ids": ids.split("|")} for name, ids in records]
 
 def save_profile(name, song_ids):
+    delete_code=secrets.token_urlsafe(18)
+    token_hash=hash_code(delete_code)
     if CLIENT:
-        selected = [BY_ID[sid] for sid in song_ids]
-        CLIENT.table("submissions").insert({"nickname":name,"song_ids":song_ids,"genres":sorted({s["genre"] for s in selected}),"moods":sorted({s["mood"] for s in selected})}).execute()
+        selected=[BY_ID[sid] for sid in song_ids]
+        CLIENT.table("submissions").insert({"nickname":name,"song_ids":song_ids,"genres":sorted({s["genre"] for s in selected}),"moods":sorted({s["mood"] for s in selected}),"delete_token_hash":token_hash}).execute()
     else:
-        local_db().execute("INSERT INTO submissions(nickname,song_ids) VALUES (?,?)",(name,"|".join(song_ids)))
+        local_db().execute("INSERT INTO submissions(nickname,song_ids,delete_hash) VALUES (?,?,?)",(name,"|".join(song_ids),token_hash))
         local_db().commit()
+    return delete_code
+
+def delete_profile(name, code):
+    if not name or not code:return False
+    wanted_hash=hash_code(code)
+    if CLIENT:
+        result=CLIENT.table("submissions").delete().eq("nickname",name.strip()).eq("delete_token_hash",wanted_hash).execute()
+        return bool(result.data)
+    db=local_db()
+    row=db.execute("SELECT 1 FROM submissions WHERE nickname=? AND delete_hash=?",(name.strip(),wanted_hash)).fetchone()
+    if row:
+        db.execute("DELETE FROM submissions WHERE nickname=? AND delete_hash=?",(name.strip(),wanted_hash))
+        db.commit()
+    return bool(row)
 
 def go(stage):
     st.session_state.stage = stage
@@ -102,7 +158,7 @@ def banner(level, title, subtitle=""):
 def card(title, sub=""):
     st.markdown(f'<div class="panel"><div class="panel-title">{html.escape(title)}</div><div class="panel-sub">{html.escape(sub)}</div></div>',unsafe_allow_html=True)
 
-for key, default in [("stage","start"),("identity",""),("picked",[]),("category","전체"),("page",1),("detail",None)]:
+for key, default in [("stage","start"),("identity",""),("picked",[]),("category","전체"),("page",1),("detail",None),("delete_code",""),("session_nonce",secrets.token_hex(12))]:
     if key not in st.session_state:
         st.session_state[key] = default
 
@@ -110,15 +166,27 @@ if st.session_state.stage == "start":
     st.markdown('''<div class="game-shell"><div class="tiny-top"><span>HI-SCORE<br>20261022</span><span class="hearts">♥ ♥ ♥</span></div><div style="text-align:center;margin:25px 0 0;font-size:33px">🎧 ✦ 🎵</div><div class="brand pixel">MELODY ♫</div><div class="game-sub">FIND YOUR MUSIC MATE !</div><div class="clouds">☁ ♡ ☁ ♫ ☁</div></div>''',unsafe_allow_html=True)
     if st.button("▶ START GAME", type="primary", use_container_width=True):go("profile")
     st.caption("♫ 좋아하는 노래로 나와 취향이 닮은 친구를 찾아봐!")
+    with st.expander("🔐 내 참여 기록 삭제하기"):
+        st.caption("등록할 때 받은 삭제 코드를 사용하면 내 음악 취향 기록을 삭제할 수 있어.")
+        del_name=st.text_input("등록했던 닉네임 또는 인스타 아이디",key="delete_name",max_chars=20)
+        del_code=st.text_input("삭제 코드",key="delete_input",type="password")
+        if st.button("내 기록 삭제",key="delete_btn",use_container_width=True):
+            try:
+                if delete_profile(del_name,del_code):st.success("내 기록이 삭제됐어! 🎉")
+                else:st.warning("일치하는 기록이 없어. 닉네임과 삭제 코드를 확인해 줘.")
+            except Exception:st.error("삭제에 실패했어. 앱 관리자에게 문의해 줘.")
     st.stop()
 
 if st.session_state.stage == "profile":
     banner("LEVEL 01 · PLAYER PROFILE","PLAYER PROFILE","♡ 너를 뭐라고 부를까? ♡")
     card("닉네임 또는 인스타그램 아이디", "다른 친구들에게 표시될 이름을 입력해 줘!")
     name=st.text_input("인스타 아이디 또는 닉네임", value=st.session_state.identity, max_chars=20, placeholder="예: @music_lover 또는 music_lover")
-    st.caption("닉네임만 입력해도 돼! 다만 인스타 아이디가 아니면 매칭된 친구가 연락하기 어려울 수 있어. 입력한 이름은 다른 참가자에게 보여.")
+    st.caption("닉네임만 입력해도 돼! 인스타 아이디가 아니면 매칭된 친구가 연락하기 어려울 수 있어.")
+    st.info("🔐 참여 안내: 입력한 닉네임 또는 인스타 아이디, 선택한 노래와 음악 취향이 다른 참여자에게 매칭 목적으로 표시돼. 연락처·실명·비밀번호는 입력하지 마! 기록은 발급받는 삭제 코드로 지울 수 있어.")
+    consent=st.checkbox("내 입력 정보가 다른 참여자에게 표시되는 것에 동의해.",key="consent")
     if st.button("NEXT LEVEL ➜",type="primary",use_container_width=True):
         if len(name.strip())<2:st.warning("2글자 이상 입력해 줘!")
+        elif not consent:st.warning("참여 안내를 확인하고 동의해 줘!")
         else:st.session_state.identity=name.strip();go("songs")
     if st.button("← BACK",use_container_width=True):go("start")
     st.stop()
@@ -173,8 +241,12 @@ if st.session_state.stage == "songs":
             st.warning("노래를 5~15곡 선택해야 해!")
         else:
             try:
-                save_profile(st.session_state.identity,st.session_state.picked)
-                go("results")
+                ok,why=allowed_submission()
+                if not ok:
+                    st.warning(why)
+                else:
+                    st.session_state.delete_code=save_profile(st.session_state.identity,st.session_state.picked)
+                    go("saved")
             except Exception:
                 # Existing nickname: allow revisiting the results without writing over another user.
                 try:
@@ -183,6 +255,18 @@ if st.session_state.stage == "songs":
                     else:st.error("이 이름은 이미 사용 중이거나 저장에 실패했어. 다른 이름으로 다시 시도해 줘!")
                 except Exception:st.error("저장 중 오류가 발생했어. 데이터베이스 연결을 확인해 줘!")
     if st.button("← 프로필로",use_container_width=True):go("profile")
+    st.stop()
+
+
+if st.session_state.stage == "saved":
+    banner("SAVE COMPLETE","PROFILE SAVED!","💗 너의 음악 취향이 저장됐어!")
+    st.success("등록 완료! 아래 삭제 코드를 꼭 보관해 줘.")
+    st.warning("🔐 삭제 코드는 이 화면을 벗어나면 다시 발급받을 수 없어. 다른 친구에게 보여주지 마!")
+    st.code(st.session_state.delete_code,language=None)
+    st.caption("나중에 메인 화면의 '내 참여 기록 삭제하기'에서 닉네임과 이 코드로 삭제할 수 있어.")
+    if st.button("코드 저장했어! ♥ 친구 TOP 10 보기 →",type="primary",use_container_width=True):
+        st.session_state.delete_code=""
+        go("results")
     st.stop()
 
 if st.session_state.stage in ("results","detail"):
@@ -212,6 +296,7 @@ if st.session_state.stage in ("results","detail"):
             if st.button(f"{idx}위 {name} · 공통 노래 보기 →",key=f"detail_{idx}",use_container_width=True):
                 st.session_state.detail=name;go("detail")
         if st.button("♫ 다시 노래 선택하기",use_container_width=True):go("songs")
+        st.caption("🔐 참여 기록을 지우고 싶다면 처음 화면의 '내 참여 기록 삭제하기'를 눌러 줘.")
         if st.button("⌂ 처음으로",use_container_width=True):
             st.session_state.identity="";st.session_state.picked=[];go("start")
         with st.expander("🎮 HOW IT WORKS · 집합과 명제"):
